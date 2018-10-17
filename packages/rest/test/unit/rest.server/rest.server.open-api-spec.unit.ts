@@ -20,7 +20,7 @@ describe('RestServer.getApiSpec()', () => {
   let server: RestServer;
   beforeEach(givenApplication);
 
-  it('comes with a valid default spec', async () => {
+  it.only('comes with a valid default spec', async () => {
     await validateApiSpec(server.getApiSpec());
   });
 
@@ -75,11 +75,13 @@ describe('RestServer.getApiSpec()', () => {
     expect(binding.tagNames).containEql('route');
   });
 
-  it('returns routes registered via app.route(route)', () => {
+  it.only('returns routes registered via app.route(route)', () => {
     function greet() {}
     server.route(new Route('get', '/greet', {responses: {}}, greet));
-
     const spec = server.getApiSpec();
+    console.log('>> SPEC');
+    console.log(spec);
+    console.log('---');
     expect(spec.paths).to.eql({
       '/greet': {
         get: {
