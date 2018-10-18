@@ -23,12 +23,6 @@ function run(argv, options) {
   const dist = utils.getDistribution();
   const mochaOpts = argv.slice(2).map(a => a.replace(/\bDIST\b/g, dist));
 
-  // Add default options
-  if (mochaOpts.indexOf('--opts') === -1) {
-    const optsPath = require.resolve('../mocha.opts');
-    mochaOpts.unshift('--opts', optsPath);
-  }
-
   // Add source map support
   if (mochaOpts.indexOf('source-map-support/register') === -1) {
     // Resolve source-map-support so that the path can be used by mocha
