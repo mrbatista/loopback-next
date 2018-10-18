@@ -11,11 +11,9 @@ import {
   SchemasObject,
 } from '@loopback/openapi-v3-types';
 import * as debugModule from 'debug';
-import {IncomingMessage} from 'http';
 import * as HttpErrors from 'http-errors';
 import * as parseUrl from 'parseurl';
 import {parse as parseQuery} from 'qs';
-import {promisify} from 'util';
 import {coerceParameter} from './coercion/coerce-parameter';
 import {RestHttpErrors} from './index';
 import {ResolvedRoute} from './router/routing-table';
@@ -23,9 +21,13 @@ import {
   OperationArgs,
   PathParameterValues,
   Request,
+  Response,
   RequestBodyParserOptions,
 } from './types';
 import {validateRequestBody} from './validation/request-body.validator';
+
+import {json, urlencoded, text} from 'body-parser';
+import * as typeis from 'type-is';
 
 type HttpError = HttpErrors.HttpError;
 
@@ -39,31 +41,6 @@ type RequestBody = {
   value: any | undefined;
   coercionRequired?: boolean;
 };
-
-const parseJsonBody: (
-  req: IncomingMessage,
-  options: {},
-) => Promise<any> = promisify(require('body/json'));
-
-const parseFormBody: (
-  req: IncomingMessage,
-  options: {},
-) => Promise<any> = promisify(require('body/form'));
-
-/**
- * Get the content-type header value from the request
- * @param req Http request
- */
-function getContentType(req: Request): string | undefined {
-  const val = req.headers['content-type'];
-  if (typeof val === 'string') {
-    return val;
-  } else if (Array.isArray(val)) {
-    // Assume only one value is present
-    return val[0];
-  }
-  return undefined;
-}
 
 /**
  * Parses the request to derive arguments to be passed in for the Application
@@ -90,6 +67,41 @@ export async function parseOperationArgs(
   );
 }
 
+/**
+ * Express body parser function type
+ */
+type BodyParser = (
+  request: Request,
+  response: Response,
+  callback: (err: HttpError) => void,
+) => void;
+
+/**
+ * Parse the body asynchronously
+ * @param handle The express middleware handler
+ * @param request Http request
+ */
+function parse(handle: BodyParser, request: Request): Promise<void> {
+  // A hack to fool TypeScript as we don't need `response`
+  const response = ({} as any) as Response;
+  return new Promise<void>((resolve, reject) => {
+    handle(request, response, err => {
+      if (err) {
+        debug('Cannot parse request body %j', err);
+        if (!err.statusCode || err.statusCode >= 500) {
+          err.statusCode = 400;
+        }
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+// Default limit of the body length
+const DEFAULT_LIMIT = '1mb';
+
 async function loadRequestBodyIfNeeded(
   operationSpec: OperationObject,
   request: Request,
@@ -99,45 +111,65 @@ async function loadRequestBodyIfNeeded(
 
   debug('Request body parser options: %j', options);
 
-  const contentType = getContentType(request);
-  debug('Loading request body with content type %j', contentType);
+  let body = await parseJsonBody(request, options);
+  if (body) return body;
+  body = await parseUrlencodedBody(request, options);
+  if (body) return body;
+  body = await parseTextBody(request, options);
+  if (body) return body;
 
-  if (
-    contentType &&
-    contentType.startsWith('application/x-www-form-urlencoded')
-  ) {
-    const body = await parseFormBody(request, options).catch(
-      (err: HttpError) => {
-        debug('Cannot parse request body %j', err);
-        if (!err.statusCode || err.statusCode >= 500) {
-          err.statusCode = 400;
-        }
-        throw err;
-      },
-    );
-    // form parser returns an object with prototype
-    return {
-      value: Object.assign({}, body),
-      coercionRequired: true,
-    };
-  }
-
-  if (contentType && !/json/.test(contentType)) {
-    throw new HttpErrors.UnsupportedMediaType(
-      `Content-type ${contentType} is not supported.`,
-    );
-  }
-
-  const jsonBody = await parseJsonBody(request, options).catch(
-    (err: HttpError) => {
-      debug('Cannot parse request body %j', err);
-      if (!err.statusCode || err.statusCode >= 500) {
-        err.statusCode = 400;
-      }
-      throw err;
-    },
+  throw new HttpErrors.UnsupportedMediaType(
+    `Content-type ${request.get('content-type')} is not supported.`,
   );
-  return {value: jsonBody};
+}
+
+async function parseJsonBody(
+  request: Request,
+  options: RequestBodyParserOptions,
+) {
+  const jsonOptions = Object.assign(
+    {type: 'json', limit: DEFAULT_LIMIT},
+    options,
+  );
+  if (typeis(request, jsonOptions.type)) {
+    await parse(json(jsonOptions), request);
+    return {value: request.body};
+  }
+  return undefined;
+}
+
+async function parseUrlencodedBody(
+  request: Request,
+  options: RequestBodyParserOptions,
+) {
+  const urlencodedOptions = Object.assign(
+    {
+      extended: true,
+      type: 'urlencoded',
+      limit: DEFAULT_LIMIT,
+    },
+    options,
+  );
+  if (typeis(request, urlencodedOptions.type)) {
+    await parse(urlencoded(urlencodedOptions), request);
+    return {value: request.body, coercionRequired: true};
+  }
+  return undefined;
+}
+
+async function parseTextBody(
+  request: Request,
+  options: RequestBodyParserOptions,
+) {
+  const textOptions = Object.assign(
+    {type: 'text/*', limit: DEFAULT_LIMIT},
+    options,
+  );
+  if (typeis(request, textOptions.type)) {
+    await parse(text(textOptions), request);
+    return {value: request.body};
+  }
+  return undefined;
 }
 
 function buildOperationArguments(
