@@ -29,6 +29,7 @@ packages/tsdocs/fixtures/monorepo/packages/pkg1/docs
 /sandbox/*
 !/sandbox/README.md
 !/sandbox/example/
+!/sandbox/validation-ajv/
 
 # ESLint cache
 .eslintcache
